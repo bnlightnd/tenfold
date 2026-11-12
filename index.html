@@ -103,6 +103,25 @@ h1 b { color: var(--fg); font-weight: 400; }
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
   touch-action: none;
 }
+.tray.has-bonus { grid-template-columns: repeat(3, 1fr) .6fr; }
+.slot.bonus::before { content: "Bonus"; position: absolute; top: 2px; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.badge { position: absolute; top: 2px; right: 6px; font-size: 15px; color: var(--fg); pointer-events: none; }
+.picking .slot:has(.piece) { outline: 2px dashed #fff; outline-offset: -4px; border-radius: 12px; }
+
+.specials { width: var(--bw); display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.bank { display: flex; flex-direction: column; gap: 1px; min-width: 64px; }
+.bank b { font-family: var(--display); font-weight: 400; font-size: 20px; line-height: 1; font-variant-numeric: tabular-nums; }
+.bank small { font-size: 10px; color: var(--muted); letter-spacing: .04em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.moves { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.sp-btn {
+  font: 600 13px var(--body); color: var(--fg); background: var(--empty); border: 1px solid var(--empty-edge);
+  border-radius: 10px; padding: 9px 4px; cursor: pointer; white-space: nowrap;
+}
+.sp-btn:disabled { opacity: .3; cursor: not-allowed; }
+.sp-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.specials.glow .sp-btn:not(:disabled) { background: #fff; color: #000; }
+.pick-msg { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 600; font-size: 15px; }
+
 .slot { display: grid; place-items: center; position: relative; }
 .piece { display: grid; gap: 2px; cursor: grab; padding: 10px; touch-action: none; }
 .piece.dead { opacity: .28; filter: grayscale(.7); cursor: not-allowed; }
@@ -169,6 +188,7 @@ h1 b { color: var(--fg); font-weight: 400; }
   <div class="board-wrap" id="wrap">
     <div class="board" id="board" aria-label="10 by 10 board"></div>
   </div>
+  <div class="specials" id="specials"></div>
   <div class="tray" id="tray"></div>
 </div>
 
@@ -201,6 +221,12 @@ h1 b { color: var(--fg); font-weight: 400; }
   let state, best = load(BEST) || 0;
   let tops = Array.isArray(load('tenfold-tops')) ? load('tenfold-tops') : [];
 
+  const cleanTops = a => (Array.isArray(a) ? a : []).filter(x => x && Number.isFinite(x.s) && Number.isFinite(x.t)).slice(0, 50);
+  function mergeTops(a, b) {
+    const seen = new Set(), out = [];
+    [...a, ...b].sort((x, y) => y.s - x.s || x.t - y.t).forEach(x => { const k = x.s + ':' + x.t; if (!seen.has(k)) { seen.add(k); out.push(x); } });
+    return out.slice(0, 10);
+  }
   const persist = () => { save(KEY, state); save(BEST, best); save('tenfold-tops', tops); };
 
   function randShape() {
@@ -209,8 +235,24 @@ h1 b { color: var(--fg); font-weight: 400; }
     return 0;
   }
   function fresh() {
-    return { grid: Array(N * N).fill(null), tray: [randShape(), randShape(), randShape()], score: 0, streak: 0, over: false };
+    return { grid: Array(N * N).fill(null), tray: [randShape(), randShape(), randShape()], score: 0, streak: 0, over: false,
+      bonus: null, rot: [false, false, false, false], bank: 0, earned: 0, prev: null, stuck: false };
   }
+  const SPECIAL_EVERY = 5000;
+  const ONE = 0; // index of the 1x1 shape
+
+  // Rotate a shape 90° clockwise and find the matching shape in the table.
+  function rotated(idx) {
+    const s = SHAPES[idx], { h } = dims(s);
+    const key = cs => cs.map(([r, c]) => r + ',' + c).sort().join(' ');
+    const k = key(s.cells.map(([r, c]) => [c, h - 1 - r]));
+    const found = SHAPES.findIndex(x => key(x.cells) === k);
+    return found < 0 ? idx : found;
+  }
+  const pieceAt = slot => slot === 3 ? state.bonus : state.tray[slot];
+  const setPiece = (slot, v) => { if (slot === 3) state.bonus = v; else state.tray[slot] = v; };
+  const livePieces = () => [...state.tray, state.bonus].filter(t => t !== null);
+  const isStuck = () => livePieces().every(t => !fitsAnywhere(state.grid, SHAPES[t]));
 
   const fits = (grid, s, r, c) => s.cells.every(([dr, dc]) => {
     const rr = r + dr, cc = c + dc;
@@ -242,12 +284,14 @@ h1 b { color: var(--fg); font-weight: 400; }
   const wrap = document.getElementById('wrap');
   const scoreEl = document.getElementById('score');
   const bestEl = document.getElementById('best');
+  const specialsEl = document.getElementById('specials');
+  let picking = null; // 'rotate' | 'discard' while choosing a piece
   const cellEls = [];
   for (let i = 0; i < N * N; i++) { const d = document.createElement('div'); d.className = 'cell'; boardEl.appendChild(d); cellEls.push(d); }
 
   function size() {
     const h = app.clientHeight, w = app.clientWidth - 32;
-    const bw = Math.max(240, Math.min(w, 520, h - 230));
+    const bw = Math.max(240, Math.min(w, 520, h - 285));
     app.style.setProperty('--bw', bw + 'px');
     app.style.setProperty('--mini', Math.max(12, Math.floor(bw / 10 * 0.5)) + 'px');
   }
@@ -304,13 +348,18 @@ h1 b { color: var(--fg); font-weight: 400; }
 
   function renderTray() {
     trayEl.innerHTML = '';
-    state.tray.forEach((idx, slot) => {
-      const sl = document.createElement('div'); sl.className = 'slot'; sl.dataset.slot = slot;
+    trayEl.classList.toggle('has-bonus', state.bonus !== null);
+    trayEl.classList.toggle('picking', !!picking);
+    const slots = state.bonus !== null ? [0, 1, 2, 3] : [0, 1, 2];
+    slots.forEach(slot => {
+      const idx = pieceAt(slot);
+      const sl = document.createElement('div'); sl.className = 'slot' + (slot === 3 ? ' bonus' : ''); sl.dataset.slot = slot;
       if (idx !== null) {
         const p = document.createElement('div'); p.className = 'piece';
         pieceGrid(p, SHAPES[idx], 'var(--mini)');
         if (!fitsAnywhere(state.grid, SHAPES[idx])) p.classList.add('dead');
         sl.appendChild(p);
+        if (state.rot[slot]) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = '↻'; b.title = 'Tap to rotate'; sl.appendChild(b); }
         sl.addEventListener('pointerdown', startDrag);
       }
       trayEl.appendChild(sl);
@@ -324,7 +373,7 @@ h1 b { color: var(--fg); font-weight: 400; }
   }
 
   function renderOver() {
-    wrap.querySelector('.over')?.remove();
+    wrap.querySelector('.over:not(.stuck)')?.remove();
     if (!state.over) return;
     const o = document.createElement('div'); o.className = 'over';
     const record = state.score >= best && state.score > 0;
@@ -343,14 +392,101 @@ h1 b { color: var(--fg); font-weight: 400; }
     }).join('') + '</ol>';
   }
   function showScores() {
-    if (wrap.querySelector('.over')) return;
+    if (wrap.querySelector('.over:not(.stuck)')) return;
+    wrap.querySelector('.over.stuck')?.remove();
     const o = document.createElement('div'); o.className = 'over';
     o.innerHTML = `<h2>High scores</h2>${tops.length ? topsHtml(-1, 10) : '<p>Finish a game to set your first score.</p>'}<button class="btn" id="close" type="button">Back to game</button>`;
     wrap.appendChild(o);
-    o.querySelector('#close').addEventListener('click', () => o.remove());
+    o.querySelector('#close').addEventListener('click', () => { o.remove(); renderStuck(); });
   }
 
-  function renderAll() { renderBoard(); renderTray(); renderScore(); renderOver(); }
+  function renderSpecials() {
+    const toNext = SPECIAL_EVERY - (state.score % SPECIAL_EVERY);
+    if (picking) {
+      specialsEl.innerHTML = `<div class="pick-msg"><span>Tap a piece to ${picking === 'rotate' ? 'rotate' : 'throw away'}</span><button class="sp-btn" type="button" id="sp-cancel" style="padding-inline:14px">Cancel</button></div>`;
+      specialsEl.querySelector('#sp-cancel').addEventListener('click', () => { picking = null; renderSpecials(); renderTray(); });
+      return;
+    }
+    const has = state.bank > 0 && !state.over;
+    const canRotate = has && [0, 1, 2, 3].some(i => pieceAt(i) !== null && !state.rot[i] && rotated(pieceAt(i)) !== pieceAt(i));
+    specialsEl.classList.toggle('glow', !!state.stuck);
+    specialsEl.innerHTML = `
+      <div class="bank" title="Special moves banked"><b>★ ${state.bank}</b><small>${toNext.toLocaleString()} to next</small></div>
+      <div class="moves">
+        <button class="sp-btn" type="button" data-sp="one" ${has && state.bonus === null ? '' : 'disabled'}>1×1</button>
+        <button class="sp-btn" type="button" data-sp="rotate" ${canRotate ? '' : 'disabled'}>Rotate</button>
+        <button class="sp-btn" type="button" data-sp="undo" ${has && state.prev ? '' : 'disabled'}>Undo</button>
+        <button class="sp-btn" type="button" data-sp="discard" ${has ? '' : 'disabled'}>Discard</button>
+      </div>`;
+    specialsEl.querySelectorAll('[data-sp]').forEach(b => b.addEventListener('click', () => useSpecial(b.dataset.sp)));
+  }
+
+  function spend() {
+    state.bank = Math.max(0, state.bank - 1);
+    if (state.prev) state.prev.bank = Math.max(0, state.prev.bank - 1);
+  }
+  function afterSpecial() {
+    if (state.tray.every(t => t === null)) { state.tray = [randShape(), randShape(), randShape()]; state.rot = [false, false, false, state.rot[3]]; }
+    checkEnd();
+    persist(); renderAll();
+  }
+  function useSpecial(kind) {
+    if (state.bank < 1 || state.over) return;
+    wrap.querySelector('.over.stuck')?.remove();
+    if (kind === 'one') {
+      if (state.bonus !== null) return;
+      spend(); state.bonus = ONE; state.rot[3] = false; afterSpecial();
+    } else if (kind === 'undo') {
+      if (!state.prev) return;
+      const restored = JSON.parse(JSON.stringify(state.prev));
+      restored.bank = Math.max(0, restored.bank - 1);
+      restored.prev = null; restored.stuck = false; restored.over = false;
+      state = restored; afterSpecial();
+    } else {
+      picking = kind; renderSpecials(); renderTray();
+    }
+  }
+  function pickPiece(slot) {
+    const kind = picking; picking = null;
+    if (pieceAt(slot) === null || state.bank < 1) return renderAll();
+    if (kind === 'rotate') {
+      if (state.rot[slot] || rotated(pieceAt(slot)) === pieceAt(slot)) return renderAll();
+      spend(); state.rot[slot] = true; setPiece(slot, rotated(pieceAt(slot)));
+    } else if (kind === 'discard') {
+      spend(); setPiece(slot, null); state.rot[slot] = false;
+    }
+    afterSpecial();
+  }
+  function tapPiece(slot) {
+    if (!state.rot[slot] || pieceAt(slot) === null) return;
+    setPiece(slot, rotated(pieceAt(slot)));
+    checkEnd(); persist(); renderAll();
+  }
+
+  // Out of room: with specials banked, pause and offer them; otherwise the game ends.
+  function checkEnd() {
+    state.stuck = false; state.over = false;
+    if (!isStuck()) return;
+    if (state.bank > 0) { state.stuck = true; return; }
+    state.over = true;
+    if (state.score > 0) tops = mergeTops(tops, [{ s: state.score, t: Date.now() }]);
+  }
+  function endGameNow() {
+    state.stuck = false; state.over = true;
+    if (state.score > 0) tops = mergeTops(tops, [{ s: state.score, t: Date.now() }]);
+    persist(); renderAll();
+  }
+  function renderStuck() {
+    wrap.querySelector('.over.stuck')?.remove();
+    if (!state.stuck || state.over) return;
+    const o = document.createElement('div'); o.className = 'over stuck';
+    o.innerHTML = `<h2>Out of room</h2><p>You have ${state.bank} special move${state.bank === 1 ? '' : 's'} banked. Use one to keep going.</p><div class="confirm"><button class="btn alt" id="end" type="button">End game</button><button class="btn" id="use" type="button">Use a special</button></div>`;
+    wrap.appendChild(o);
+    o.querySelector('#use').addEventListener('click', () => o.remove());
+    o.querySelector('#end').addEventListener('click', endGameNow);
+  }
+
+  function renderAll() { renderBoard(); renderTray(); renderScore(); renderSpecials(); renderOver(); renderStuck(); }
 
   function toast(text, sub) {
     const t = document.createElement('div'); t.className = 'toast';
@@ -382,8 +518,10 @@ h1 b { color: var(--fg); font-weight: 400; }
     if (e.button !== undefined && e.button !== 0) return;
     const slotEl = e.currentTarget;
     const slot = +slotEl.dataset.slot;
-    const idx = state.tray[slot]; if (idx === null) return;
+    const idx = pieceAt(slot); if (idx === null) return;
     e.preventDefault();
+    if (picking) return pickPiece(slot);
+    wrap.querySelector('.over.stuck')?.remove();
     const pieceEl = slotEl.querySelector('.piece');
     const m = metrics(), s = SHAPES[idx], { h, w } = dims(s);
     const f = document.createElement('div'); f.className = 'float';
@@ -396,7 +534,7 @@ h1 b { color: var(--fg); font-weight: 400; }
     const mini = (pr.width - 20) / pw; // piece has 10px padding each side
     const home = { x: pr.left + pr.width / 2 - pw / 2, y: pr.top + pr.height / 2 - ph / 2 };
     const lift = e.pointerType === 'mouse' ? ph / 2 : ph + m.pitch * 0.75;
-    drag = { slot, idx, el: f, inner, slotEl, pieceEl, m, pw, ph, mini, home, pos: null, lift, x: e.clientX, y: e.clientY, raf: 0 };
+    drag = { slot, idx, el: f, inner, slotEl, pieceEl, m, pw, ph, mini, home, pos: null, lift, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), raf: 0 };
 
     // start shrunk exactly over the tray piece, then grow and glide up to the finger
     f.style.transform = `translate3d(${e.clientX - pw / 2}px, ${e.clientY - lift}px, 0)`;
@@ -454,10 +592,15 @@ h1 b { color: var(--fg); font-weight: 400; }
     }
     setPreview(null);
     d.el.remove(); d.pieceEl.classList.remove('lifted'); busy = false;
+    const moved = Math.hypot(d.x - d.x0, d.y - d.y0);
+    if (e.type === 'pointerup' && moved < 12 && performance.now() - d.t0 < 400) tapPiece(d.slot);
+    else if (state.stuck) renderStuck();
   }
 
   // ---------- game ----------
   function place(slot, idx, r, c) {
+    const snap = JSON.parse(JSON.stringify({ ...state, prev: null }));
+    state.prev = snap;
     const s = SHAPES[idx];
     const lines = linesAfter(state.grid, s, r, c);
     const placed = s.cells.map(([dr, dc]) => (r + dr) * N + c + dc);
@@ -469,8 +612,11 @@ h1 b { color: var(--fg); font-weight: 400; }
       gained += 10 * n * (n + 1) / 2 + (state.streak > 1 ? 10 * (state.streak - 1) * n : 0);
     } else state.streak = 0;
     state.score += gained;
-    state.tray[slot] = null;
-    if (state.tray.every(t => t === null)) state.tray = [randShape(), randShape(), randShape()];
+    setPiece(slot, null); state.rot[slot] = false;
+    if (state.tray.every(t => t === null)) { state.tray = [randShape(), randShape(), randShape()]; state.rot = [false, false, false, state.rot[3]]; }
+    const earnedNow = Math.floor(state.score / SPECIAL_EVERY);
+    const newly = earnedNow - state.earned;
+    if (newly > 0) { state.bank += newly; state.earned = earnedNow; }
 
     lines.cells.forEach(i => { state.grid[i] = null; });
     renderBoard();
@@ -479,22 +625,23 @@ h1 b { color: var(--fg); font-weight: 400; }
       const sub = state.streak > 1 ? `streak ×${state.streak}` : (words[Math.min(lines.count, 5)] || '');
       toast('+' + gained, sub);
     }
+    if (newly > 0) setTimeout(() => toast('★ +' + newly, 'special move earned'), lines.count ? 700 : 0);
 
-    state.over = state.tray.filter(t => t !== null).every(t => !fitsAnywhere(state.grid, SHAPES[t]));
     if (state.score > best) best = state.score;
-    if (state.over && state.score > 0) tops = mergeTops(tops, [{ s: state.score, t: Date.now() }]);
-    renderTray(); renderScore();
+    checkEnd();
+    renderTray(); renderScore(); renderSpecials();
     persist();
-    if (state.over) renderOver();
+    renderOver(); renderStuck();
   }
 
-  function newGame() { state = fresh(); persist(); renderAll(); }
+  function newGame() { picking = null; wrap.querySelectorAll('.over').forEach(o => o.remove()); state = fresh(); persist(); renderAll(); }
 
   // restart with an in-page confirm
   document.getElementById('scores').addEventListener('click', showScores);
   const restartBtn = document.getElementById('restart');
   restartBtn.addEventListener('click', () => {
     if (state.over || state.score === 0) return newGame();
+    wrap.querySelector('.over.stuck')?.remove();
     if (wrap.querySelector('.over')) return;
     const o = document.createElement('div'); o.className = 'over';
     o.innerHTML = `<h2>Start over?</h2><p>Your current score of ${state.score} will be lost.</p><div class="confirm"><button class="btn alt" id="keep" type="button">Keep playing</button><button class="btn" id="yes" type="button">New game</button></div>`;
@@ -508,10 +655,24 @@ h1 b { color: var(--fg); font-weight: 400; }
       s.tray.every(t => t === null || (Number.isInteger(t) && t >= 0 && t < SHAPES.length));
   }
 
+  // Games saved before special moves existed: credit specials for points already scored.
+  function upgrade(st) {
+    const okIdx = t => t === null || (Number.isInteger(t) && t >= 0 && t < SHAPES.length);
+    if (!okIdx(st.bonus ?? null)) st.bonus = null; else st.bonus = st.bonus ?? null;
+    if (!Array.isArray(st.rot) || st.rot.length !== 4) st.rot = [false, false, false, false];
+    if (!Number.isFinite(st.earned)) { st.earned = Math.floor((st.score || 0) / SPECIAL_EVERY); st.bank = st.earned; }
+    if (!Number.isFinite(st.bank)) st.bank = 0;
+    if (!st.prev || !valid(st.prev)) st.prev = null;
+    st.stuck = !!st.stuck;
+    return st;
+  }
+
   function start(data) {
     const saved = data && data.state;
     state = valid(saved) ? saved : (valid(load(KEY)) ? load(KEY) : fresh());
+    upgrade(state);
     if (state.tray.every(t => t === null)) state.tray = [randShape(), randShape(), randShape()];
+    if (!state.over) checkEnd();
     size(); renderAll();
   }
   window.claude?.hot?.snapshot?.(() => ({ state }));
