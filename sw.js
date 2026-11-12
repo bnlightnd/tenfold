@@ -1,5 +1,5 @@
 // Tenfold offline cache. Bump VERSION whenever the game files change.
-const VERSION = 'tenfold-v3';
+const VERSION = 'tenfold-v4';
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

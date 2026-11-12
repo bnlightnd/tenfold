@@ -148,18 +148,36 @@ h1 b { color: var(--fg); font-weight: 400; }
 @keyframes rise { 0% { opacity: 0; transform: translate(-50%, -30%) scale(.8); } 15% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -110%); } }
 
 .over {
-  position: absolute; inset: 0; border-radius: 12px; z-index: 5;
+  position: absolute; inset: 0; border-radius: 12px; z-index: 5; overflow-y: auto; overscroll-behavior: contain;
   background: rgba(10,12,18,.84); backdrop-filter: blur(3px);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 16px;
 }
+.over.tall {
+  position: fixed; border-radius: 0; z-index: 30; background: rgba(0,0,0,.94); justify-content: flex-start; gap: 8px;
+  padding-top: calc(28px + env(safe-area-inset-top, 0px)); padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.over.tall .tops { width: min(340px, 100%); }
+.over.tall .tops li { padding: 7px 12px; }
+.over.tall .tops li i { font-size: 17px; }
+.over.tall .tops li b { font-size: 18px; }
+.over.tall .btn { margin-top: 8px; }
+.initials { display: flex; gap: 10px; margin: 2px 0; }
+.ini { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.ini button { width: 46px; height: 30px; border: 0; border-radius: 8px; background: var(--empty); color: var(--fg); font-size: 14px; cursor: pointer; touch-action: manipulation; }
+.ini button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ini output { font-family: var(--display); font-size: 40px; line-height: 1.1; width: 46px; text-align: center; border-bottom: 3px solid var(--muted); }
+.ini.on output { border-color: #fff; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { color: var(--muted); } }
 .over h2 { margin: 0; font-family: var(--display); font-size: 30px; font-weight: 400; }
 .over p { margin: 0; color: var(--muted); font-size: 15px; }
 .over .big { font-family: var(--display); font-size: 44px; color: var(--accent); }
 .best-btn { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: right; }
-.tops { list-style: none; margin: 4px 0 0; padding: 0; width: min(240px, 100%); display: flex; flex-direction: column; gap: 4px; }
-.tops li { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--empty); font-variant-numeric: tabular-nums; }
-.tops li span { color: var(--muted); font-size: 13px; }
-.tops li b { font-family: var(--display); font-weight: 400; font-size: 18px; text-align: left; }
+.tops { list-style: none; margin: 2px 0 0; padding: 0; width: min(280px, 100%); display: flex; flex-direction: column; gap: 3px; }
+.tops li { display: grid; grid-template-columns: 20px 44px 1fr auto; gap: 8px; align-items: baseline; padding: 3px 10px; border-radius: 6px; background: var(--empty); font-variant-numeric: tabular-nums; }
+.tops li span { color: var(--muted); font-size: 12px; }
+.tops li i { font-family: var(--display); font-style: normal; font-size: 14px; letter-spacing: .12em; text-align: left; }
+.tops li b { font-family: var(--display); font-weight: 400; font-size: 15px; text-align: right; }
 .tops li em { font-style: normal; color: var(--muted); font-size: 13px; }
 .tops li.me { background: #fff; color: #000; }
 .tops li.me span, .tops li.me em { color: #444; }
@@ -220,15 +238,19 @@ h1 b { color: var(--fg); font-weight: 400; }
   const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
   let state, best = load(BEST) || 0;
-  let tops = Array.isArray(load('tenfold-tops')) ? load('tenfold-tops') : [];
+  let tops = [];
 
-  const cleanTops = a => (Array.isArray(a) ? a : []).filter(x => x && Number.isFinite(x.s) && Number.isFinite(x.t)).slice(0, 50);
+  const cleanName = n => (typeof n === 'string' ? n.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) : '');
+  const cleanTops = a => (Array.isArray(a) ? a : []).filter(x => x && Number.isFinite(x.s) && Number.isFinite(x.t)).map(x => ({ s: x.s, t: x.t, n: cleanName(x.n) })).slice(0, 50);
+  let lastInitials = cleanName(load('tenfold-initials')) || 'AAA';
+  tops = cleanTops(load('tenfold-tops'));
+  if (tops.length && tops[0].s > best) best = tops[0].s;
   function mergeTops(a, b) {
     const seen = new Set(), out = [];
-    [...a, ...b].sort((x, y) => y.s - x.s || x.t - y.t).forEach(x => { const k = x.s + ':' + x.t; if (!seen.has(k)) { seen.add(k); out.push(x); } });
+    [...a, ...b].sort((x, y) => y.s - x.s || x.t - y.t || (y.n ? 1 : 0) - (x.n ? 1 : 0)).forEach(x => { const k = x.s + ':' + x.t; if (!seen.has(k)) { seen.add(k); out.push(x); } });
     return out.slice(0, 10);
   }
-  const persist = () => { save(KEY, state); save(BEST, best); save('tenfold-tops', tops); };
+  const persist = () => { save(KEY, state); save(BEST, best); save('tenfold-tops', tops); save('tenfold-initials', lastInitials); };
 
   function randShape() {
     let r = Math.random() * TOTAL_W;
@@ -374,30 +396,69 @@ h1 b { color: var(--fg); font-weight: 400; }
   }
 
   function renderOver() {
-    wrap.querySelector('.over:not(.stuck)')?.remove();
+    document.querySelector('.over:not(.stuck)')?.remove();
     if (!state.over) return;
     const o = document.createElement('div'); o.className = 'over';
-    const record = state.score >= best && state.score > 0;
-    o.innerHTML = `<h2>No room left</h2><div class="big">${state.score}</div><p>${record ? 'New best score.' : 'Best: ' + best}</p>${topsHtml(state.score)}<button class="btn" id="again" type="button">Play again</button>`;
-    wrap.appendChild(o);
+    const record = state.score > 0 && state.score >= best && (!tops.length || state.score >= tops[0].s);
+    if (state.naming) {
+      const rank = tops.findIndex(x => x.t === state.entry) + 1;
+      o.innerHTML = `<h2>${record ? 'New best score' : 'High score'}</h2><div class="big">${state.score.toLocaleString()}</div><p>Number ${rank} on your top ten. Enter your initials.</p><div class="initials"></div><button class="btn" id="ini-save" type="button">Save</button>`;
+      wrap.appendChild(o);
+      const read = initialsEntry(o);
+      o.querySelector('#ini-save').addEventListener('click', () => {
+        lastInitials = read();
+        const e = tops.find(x => x.t === state.entry); if (e) e.n = lastInitials;
+        state.naming = false; persist(); renderOver();
+      });
+      return;
+    }
+    o.classList.add('tall');
+    o.innerHTML = `<h2>No room left</h2><div class="big">${state.score.toLocaleString()}</div><p>${record ? 'New best score.' : 'Best: ' + best.toLocaleString()}</p>${topsHtml(state.entry)}<button class="btn" id="again" type="button">Play again</button>`;
+    document.body.appendChild(o);
     o.querySelector('#again').addEventListener('click', newGame);
   }
 
-  function topsHtml(mark, n = 5) {
+  function topsHtml(markT) {
     if (!tops.length) return '';
-    let marked = false;
-    return '<ol class="tops">' + tops.slice(0, n).map((x, i) => {
-      const me = !marked && x.s === mark && state.over && (marked = true);
+    return '<ol class="tops">' + tops.slice(0, 10).map((x, i) => {
       const d = new Date(x.t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      return `<li class="${me ? 'me' : ''}"><span>${i + 1}</span><b>${x.s}</b><em>${d}</em></li>`;
+      return `<li class="${x.t === markT ? 'me' : ''}"><span>${i + 1}</span><i>${x.n || '---'}</i><b>${x.s.toLocaleString()}</b><em>${d}</em></li>`;
     }).join('') + '</ol>';
   }
+
+  // Arcade-style initials: three letters, each stepped with up/down, or typed on a keyboard.
+  const ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  function initialsEntry(o) {
+    const letters = (lastInitials + 'AAA').slice(0, 3).split('');
+    let cur = 0;
+    const box = o.querySelector('.initials');
+    box.innerHTML = [0, 1, 2].map(i => `<div class="ini" data-i="${i}"><button type="button" data-d="-1" aria-label="Previous letter">▲</button><output>${letters[i]}</output><button type="button" data-d="1" aria-label="Next letter">▼</button></div>`).join('');
+    const draw = () => box.querySelectorAll('.ini').forEach((el, i) => { el.querySelector('output').textContent = letters[i]; el.classList.toggle('on', i === cur); });
+    const step = (i, d) => { cur = i; letters[i] = ABC[(ABC.indexOf(letters[i]) + d + ABC.length) % ABC.length]; draw(); };
+    box.querySelectorAll('.ini').forEach((el, i) => {
+      el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => step(i, +b.dataset.d)));
+      el.querySelector('output').addEventListener('click', () => { cur = i; draw(); });
+    });
+    const onKey = e => {
+      if (!document.body.contains(box)) return document.removeEventListener('keydown', onKey);
+      const k = e.key.toUpperCase();
+      if (ABC.includes(k) && k.length === 1) { letters[cur] = k; cur = Math.min(2, cur + 1); draw(); e.preventDefault(); }
+      else if (e.key === 'ArrowUp') { step(cur, -1); e.preventDefault(); }
+      else if (e.key === 'ArrowDown') { step(cur, 1); e.preventDefault(); }
+      else if (e.key === 'ArrowLeft' || e.key === 'Backspace') { cur = Math.max(0, cur - 1); draw(); e.preventDefault(); }
+      else if (e.key === 'ArrowRight') { cur = Math.min(2, cur + 1); draw(); e.preventDefault(); }
+      else if (e.key === 'Enter') { o.querySelector('#ini-save')?.click(); e.preventDefault(); }
+    };
+    document.addEventListener('keydown', onKey);
+    draw();
+    return () => letters.join('');
+  }
   function showScores() {
-    if (wrap.querySelector('.over:not(.stuck)')) return;
-    wrap.querySelector('.over.stuck')?.remove();
-    const o = document.createElement('div'); o.className = 'over';
-    o.innerHTML = `<h2>High scores</h2>${tops.length ? topsHtml(-1, 10) : '<p>Finish a game to set your first score.</p>'}<button class="btn" id="close" type="button">Back to game</button>`;
-    wrap.appendChild(o);
+    if (document.querySelector('.over:not(.stuck)')) return;
+    document.querySelector('.over.stuck')?.remove();
+    const o = document.createElement('div'); o.className = 'over tall';
+    o.innerHTML = `<h2>Top ten</h2>${tops.length ? topsHtml(null) : '<p>Finish a game to set your first score.</p>'}<button class="btn" id="close" type="button">Back to game</button>`;
+    document.body.appendChild(o);
     o.querySelector('#close').addEventListener('click', () => { o.remove(); renderStuck(); });
   }
 
@@ -433,7 +494,7 @@ h1 b { color: var(--fg); font-weight: 400; }
   }
   function useSpecial(kind) {
     if (state.bank < 1 || state.over) return;
-    wrap.querySelector('.over.stuck')?.remove();
+    document.querySelector('.over.stuck')?.remove();
     if (kind === 'one') {
       if (state.bonus !== null) return;
       spend(); state.bonus = ONE; state.rot[3] = false; afterSpecial();
@@ -469,16 +530,23 @@ h1 b { color: var(--fg); font-weight: 400; }
     state.stuck = false; state.over = false;
     if (!isStuck()) return;
     if (state.bank > 0) { state.stuck = true; return; }
-    state.over = true;
-    if (state.score > 0) tops = mergeTops(tops, [{ s: state.score, t: Date.now() }]);
+    recordGame();
+  }
+  // Finished game: if it makes the top ten, save it now under the last initials and ask for new ones.
+  function recordGame() {
+    state.over = true; state.stuck = false;
+    if (state.score <= 0) return;
+    const t = Date.now();
+    tops = mergeTops(tops, [{ s: state.score, t, n: lastInitials }]);
+    state.entry = tops.some(x => x.t === t) ? t : null;
+    state.naming = state.entry !== null;
   }
   function endGameNow() {
-    state.stuck = false; state.over = true;
-    if (state.score > 0) tops = mergeTops(tops, [{ s: state.score, t: Date.now() }]);
+    recordGame();
     persist(); renderAll();
   }
   function renderStuck() {
-    wrap.querySelector('.over.stuck')?.remove();
+    document.querySelector('.over.stuck')?.remove();
     if (!state.stuck || state.over) return;
     const o = document.createElement('div'); o.className = 'over stuck';
     o.innerHTML = `<h2>Out of room</h2><p>You have ${state.bank} special move${state.bank === 1 ? '' : 's'} banked. Use one to keep going.</p><div class="confirm"><button class="btn alt" id="end" type="button">End game</button><button class="btn" id="use" type="button">Use a special</button></div>`;
@@ -522,7 +590,7 @@ h1 b { color: var(--fg); font-weight: 400; }
     const idx = pieceAt(slot); if (idx === null) return;
     e.preventDefault();
     if (picking) return pickPiece(slot);
-    wrap.querySelector('.over.stuck')?.remove();
+    document.querySelector('.over.stuck')?.remove();
     const pieceEl = slotEl.querySelector('.piece');
     const m = metrics(), s = SHAPES[idx], { h, w } = dims(s);
     const f = document.createElement('div'); f.className = 'float';
@@ -635,15 +703,15 @@ h1 b { color: var(--fg); font-weight: 400; }
     renderOver(); renderStuck();
   }
 
-  function newGame() { picking = null; wrap.querySelectorAll('.over').forEach(o => o.remove()); state = fresh(); persist(); renderAll(); }
+  function newGame() { picking = null; document.querySelectorAll('.over').forEach(o => o.remove()); state = fresh(); persist(); renderAll(); }
 
   // restart with an in-page confirm
   document.getElementById('scores').addEventListener('click', showScores);
   const restartBtn = document.getElementById('restart');
   restartBtn.addEventListener('click', () => {
     if (state.over || state.score === 0) return newGame();
-    wrap.querySelector('.over.stuck')?.remove();
-    if (wrap.querySelector('.over')) return;
+    document.querySelector('.over.stuck')?.remove();
+    if (document.querySelector('.over')) return;
     const o = document.createElement('div'); o.className = 'over';
     o.innerHTML = `<h2>Start over?</h2><p>Your current score of ${state.score} will be lost.</p><div class="confirm"><button class="btn alt" id="keep" type="button">Keep playing</button><button class="btn" id="yes" type="button">New game</button></div>`;
     wrap.appendChild(o);
@@ -665,6 +733,8 @@ h1 b { color: var(--fg); font-weight: 400; }
     if (!Number.isFinite(st.bank)) st.bank = 0;
     if (!st.prev || !valid(st.prev)) st.prev = null;
     st.stuck = !!st.stuck;
+    st.entry = Number.isFinite(st.entry) ? st.entry : null;
+    st.naming = !!st.naming && st.over && st.entry !== null;
     return st;
   }
 
